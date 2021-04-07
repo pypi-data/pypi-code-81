@@ -1,0 +1,1 @@
+class NotInt(int): __eq__, __ne__ = lambda _, __: bool(int(_).__ne__(__)), lambda _, __: bool(int(_).__eq__(__))
