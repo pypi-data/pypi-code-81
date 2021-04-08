@@ -1,0 +1,1 @@
+from dcpoc.prime_numbers import is_prime
