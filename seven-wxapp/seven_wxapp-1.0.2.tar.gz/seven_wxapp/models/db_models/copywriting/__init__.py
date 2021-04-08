@@ -1,0 +1,1 @@
+__all__=["copywriting_config_model",]
