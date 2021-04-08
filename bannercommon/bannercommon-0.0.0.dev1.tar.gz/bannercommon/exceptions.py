@@ -1,0 +1,1 @@
+class PythonPackageLeakage(Exception): pass
