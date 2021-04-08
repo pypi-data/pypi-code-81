@@ -1,0 +1,1 @@
+from awsome.s3 import S3Client
