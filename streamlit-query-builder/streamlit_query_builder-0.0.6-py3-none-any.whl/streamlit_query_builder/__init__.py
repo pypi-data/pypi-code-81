@@ -1,0 +1,25 @@
+import os
+import streamlit as st
+import streamlit.components.v1 as components
+
+_RELEASE = True
+
+if not _RELEASE:
+    _query_builder = components.declare_component(
+        "streamlit_query_builder",
+        url="http://localhost:3001",
+    )
+else:
+    parent_dir = os.path.dirname(os.path.abspath(__file__))
+    build_dir = os.path.join(parent_dir, "frontend/build")
+    _query_builder = components.declare_component("streamlit_query_builder", path=build_dir)
+
+def query_builder(columns: list):
+    fields = []
+    for c in columns:
+        if isinstance(c, str):
+            fields.append({'name': c, 'label' : c})
+        if isinstance(c, dict):
+            if 'name' in c and 'label' in c:
+                fields.append(c)
+    return _query_builder(fields=fields)
