@@ -1,0 +1,2 @@
+TEST_PACKAGE = "tests"
+JAVA_TEST_PROJECT = TEST_PACKAGE + "/java"
