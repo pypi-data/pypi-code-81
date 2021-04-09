@@ -1,0 +1,42 @@
+from bs4 import BeautifulSoup
+
+from ..AuthSession import AuthSession
+from ..utils.page import parse_form_hidden_inputs
+from ..utils.aes import encrypt
+
+
+class IDSSession(AuthSession):
+    cookie_name = 'ids'
+
+    def __init__(
+            self, target, username, password,
+            *args, **kwargs
+    ):
+        super().__init__(f'{self.cookie_name}_{username}')
+        if self.is_logged_in():
+            return
+        else:
+            self.cookies.clear()
+        page = self.get(
+            'http://ids.xidian.edu.cn/authserver/login',
+            params={'service': target, 'type': 'userNameLogin'}
+        ).text
+        page = BeautifulSoup(page, "lxml")
+        form = page.findChild(attrs={'id': 'pwdFromId'})
+        params = parse_form_hidden_inputs(form)
+        enc = form.find('input', id='pwdEncryptSalt').get('value')
+        self.post(
+            'http://ids.xidian.edu.cn/authserver/login',
+            params={'service': target},
+            data=dict(params, **{
+                'username': username,
+                'password': encrypt(password.encode(), enc.encode()),
+                'rememberMe': 'on'
+            })
+        )
+
+    def is_logged_in(self):
+        return self.get(
+            'http://ids.xidian.edu.cn/authserver/index.do',
+            allow_redirects=False
+        ).status_code != 302
