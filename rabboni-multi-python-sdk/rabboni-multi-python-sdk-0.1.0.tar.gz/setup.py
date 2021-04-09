@@ -1,0 +1,30 @@
+# -*- coding: utf-8 -*-
+from setuptools import setup
+
+packages = \
+['rabboni_multi_python_sdk']
+
+package_data = \
+{'': ['*']}
+
+install_requires = \
+['bleak>=0.10.0,<0.11.0']
+
+setup_kwargs = {
+    'name': 'rabboni-multi-python-sdk',
+    'version': '0.1.0',
+    'description': '',
+    'long_description': 'Rabboni Python SDK\n========\n\nPrerequisite\n-----\n\n**環境 Python 版本 3.7 以上**\n\n---\n\nInstallation\n-----\n\n```\npip install rabboni-multi-python-sdk\n```\n\nor\n\n```\npython3 setup.py install\n```\n\n---\n\nUsage\n-----\n\n### Rabboni 建立連線\n\n``` python\nrab = Rabboni()\nasyncio.run(rab.connect())\n```\n\n\n### 讀取 Rabboni 電力\n\n``` python\nasync def fetch_battery_level(rab: Rabboni):\n    await asyncio.sleep(15)\n    await rab.get_battery_level()\n\nrab = Rabboni(mode=\'BLE\', name=\'TEST_RAB\')\ntasks = [\n    asyncio.ensure_future(rab.connect()),\n    asyncio.ensure_future(fetch_battery_level(rab))\n]\nloop = asyncio.get_event_loop()\nloop.run_until_complete(asyncio.wait(tasks))\n```\n\n---\n\nExample\n-----\n\n* Rabboni 建立連線\n\n``` python\nimport asyncio\n\nfrom rabboni_multi_python_sdk import Rabboni\n\nrab = Rabboni()\n\ntry:\n    asyncio.run(rab.scan())\n    asyncio.run(rab.connect(mac_address=\'D1:35:2D:30:19:35\'))\nexcept KeyboardInterrupt:\n    print(\'Bye~~\')\n```\n\n* 讀取 Rabboni 電力\n\n``` python\nimport asyncio\n\nfrom rabboni_multi_python_sdk import Rabboni\n\n\nasync def fetch_battery_level(rab: Rabboni):\n    await asyncio.sleep(15)\n    await rab.get_battery_level()\n\n\ndef run():\n    rab = Rabboni(mode=\'BLE\', name=\'TEST_RAB\')\n    tasks = [\n        asyncio.ensure_future(rab.connect()),\n        asyncio.ensure_future(fetch_battery_level(rab))\n    ]\n    loop = asyncio.get_event_loop()\n    loop.run_until_complete(asyncio.wait(tasks))\n\n\nif __name__ == "__main__":\n    try:\n        run()\n    except KeyboardInterrupt:\n        print(\'Bye~~\')\n```\n\n* Run example\n\n```\n❯ python .\\examples\\example.py\nScan BLE Devices: [66:A5:83:23:1B:A7: Apple, Inc. (b\'\\x10\\x06\\x00\\x1ej\\x1a\\xda\\xdb\'), 74:68:F8:74:EB:41: Apple, Inc. (b\'\\x10\\x05E\\x1c3\\x94\\xf8\'), 43:E1:7A:E6:82:80: Apple, Inc. (b\'\\x10\\x05\\x0c\\x1c\\xdf\\x92\\xef\'), 5F:E9:D5:5E:01:4B: Apple, Inc. (b\'\\x10\\x06H\\x1e\\xac\\x11\\xeb\\x04\'), 05:6B:D7:72:07:CE: Microsoft (b\'\\x01\\t \\x02z\\x021R!\\x82^\\x100\\xcd\\xa4v\\x1d\\xb7\\x04\\xe3p\\xd3tI\\xc5\\x84N\'), 79:78:A4:55:88:12: Apple, Inc. (b\'\\x07\\x19\\x01\\x0f \\x03\\x88\\x8f\\x01\\x00\\x05\\xdd?T\\x80\\xdeg\\xe8\\xacN]\\x0btW\\x07\\x91\\xcb\'), E5:9F:B8:36:17:9A: RABBONI]\nDiscover BLE Devices: [E5:9F:B8:36:17:9A: RABBONI, 79:78:A4:55:88:12: Apple, Inc. (b\'\\x07\\x19\\x01\\x0f \\x03\\x88\\x8f\\x01\\x00\\x05\\xdd?T\\x80\\xdeg\\xe8\\xacN]\\x0btW\\x07\\x91\\xcb\'), 05:6B:D7:72:07:CE: Microsoft (b\'\\x01\\t \\x02z\\x021R!\\x82^\\x100\\xcd\\xa4v\\x1d\\xb7\\x04\\xe3p\\xd3tI\\xc5\\x84N\'), 66:A5:83:23:1B:A7: Apple, Inc. (b\'\\x10\\x06\\x00\\x1ej\\x1a\\xda\\xdb\'), 5F:E9:D5:5E:01:4B: Apple, Inc. (b\'\\x10\\x06H\\x1e\\xac\\x11\\xeb\\x04\'), 74:68:F8:74:EB:41: Apple, Inc. (b\'\\x10\\x05E\\x1c3\\x94\\xf8\'), 43:E1:7A:E6:82:80: Apple, Inc. (b\'\\x10\\x05\\x0c\\x1c\\xdf\\x92\\xef\')]\nConnecting BleakClientDotNet (E5:9F:B8:36:17:9A)\nConnected: True\nStarting notification.\n{\'name\': \'Rabboni\', \'acc\': [0.008, -0.02, 0.994], \'gyr\': [-0.006, 0.011, 0.007], \'trigger\': False, \'count\': [0, 156]}\n{\'name\': \'Rabboni\', \'acc\': [0.009, -0.02, 0.995], \'gyr\': [-0.005, 0.01, 0.006], \'trigger\': False, \'count\': [0, 156]}\n{\'name\': \'Rabboni\', \'acc\': [0.013, -0.021, 0.993], \'gyr\': [-0.005, 0.011, 0.007], \'trigger\': False, \'count\': [0, 156]}\n{\'name\': \'Rabboni\', \'acc\': [0.006, -0.023, 0.996], \'gyr\': [-0.005, 0.011, 0.007], \'trigger\': False, \'count\': [0, 156]}\n{\'name\': \'Rabboni\', \'acc\': [0.005, -0.02, 0.991], \'gyr\': [-0.004, 0.011, 0.005], \'trigger\': False, \'count\': [0, 156]}\n{\'name\': \'Rabboni\', \'acc\': [0.007, -0.021, 0.991], \'gyr\': [-0.003, 0.011, 0.007], \'trigger\': False, \'count\': [0, 156]}\n{\'name\': \'Rabboni\', \'acc\': [0.007, -0.019, 0.993], \'gyr\': [-0.006, 0.013, 0.006], \'trigger\': False, \'count\': [0, 156]}\n{\'name\': \'Rabboni\', \'acc\': [0.008, -0.022, 0.994], \'gyr\': [-0.004, 0.012, 0.007], \'trigger\': False, \'count\': [0, 156]}\n{\'name\': \'Rabboni\', \'acc\': [0.008, -0.018, 0.993], \'gyr\': [-0.004, 0.013, 0.006], \'trigger\': False, \'count\': [0, 156]}\n{\'name\': \'Rabboni\', \'acc\': [0.009, -0.023, 0.992], \'gyr\': [-0.005, 0.012, 0.007], \'trigger\': False, \'count\': [0, 156]}\n{\'name\': \'Rabboni\', \'acc\': [0.007, -0.019, 0.994], \'gyr\': [-0.004, 0.013, 0.005], \'trigger\': False, \'count\': [0, 156]}\n{\'name\': \'Rabboni\', \'acc\': [0.007, -0.022, 0.994], \'gyr\': [-0.005, 0.011, 0.005], \'trigger\': False, \'count\': [0, 156]}\nClient BleakClientDotNet (E5:9F:B8:36:17:9A) got disconnected!\nSystem.ObjectDisposedException: The object has been closed. (Exception from HRESULT: 0x80000013)\nShutting down Rabboni notification.\n```\n',
+    'author': 'NCTUTWT Lab',
+    'author_email': 'nctutwtlab@nctu.edu.tw',
+    'maintainer': None,
+    'maintainer_email': None,
+    'url': None,
+    'packages': packages,
+    'package_data': package_data,
+    'install_requires': install_requires,
+    'python_requires': '>=3.7,<4.0',
+}
+
+
+setup(**setup_kwargs)
