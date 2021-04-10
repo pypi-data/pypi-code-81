@@ -1,0 +1,2 @@
+class OutputNotSupported(Exception):
+	pass
