@@ -1,0 +1,1 @@
+from microtranslator.translator import Translator
