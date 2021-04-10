@@ -1,0 +1,11 @@
+
+INTEGER = "INTEGER"
+integer = "INTEGER"
+FLOAT = "REAL"
+float = "REAL"
+VARCHAR = "TEXT"
+varchar = "TEXT"
+TEXT = "TEXT"
+text = "TEXT"
+BLOB = "BLOB"
+blob = "BLOB"
