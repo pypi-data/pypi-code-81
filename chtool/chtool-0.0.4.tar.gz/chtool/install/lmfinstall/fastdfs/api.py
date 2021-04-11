@@ -1,0 +1,1 @@
+from lmfinstall.fastdfs.v1.core import fdfs 
