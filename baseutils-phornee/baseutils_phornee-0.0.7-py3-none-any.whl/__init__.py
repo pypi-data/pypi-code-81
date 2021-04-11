@@ -1,0 +1,1 @@
+from .managedclass import ManagedClass
