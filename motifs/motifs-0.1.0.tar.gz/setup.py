@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+
+import os
+import io
+from setuptools import find_packages, setup, Command
+
+"""
+git tag {VERSION}
+git push --tags
+python setup.py sdist
+twine upload dist/*
+"""
+
+VERSION = "0.1.0"
+
+here = os.path.abspath(os.path.dirname(__file__))
+with io.open(os.path.join(here, "README.md"), encoding="utf-8") as f:
+    long_description = "\n" + f.read()
+
+setup(
+    name="motifs",
+    version=VERSION,
+    author="Jordan Matelsky",
+    author_email="jordan@matelsky.com",
+    description=("Network motif management library"),
+    long_description=long_description,
+    long_description_content_type="text/markdown",
+    license="ISC",
+    keywords=["graph", "motif"],
+    url="https://github.com/aplbrain/motifs/tarball/" + VERSION,
+    packages=find_packages(exclude=["tests", "*.tests", "*.tests.*", "tests.*"]),
+    classifiers=[],
+    install_requires=[
+        "networkx",
+    ],
+    include_package_data=True,
+)
