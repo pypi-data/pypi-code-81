@@ -1,0 +1,174 @@
+try:
+    from loguru import logger
+except ImportError: # pragma: no cover
+    import logging
+    logger = logging.getLogger(__name__)
+from typing import Dict, Set
+
+from pydispatch import Dispatcher, Property
+
+from tslumd import TallyType, TallyColor
+
+__all__ = ('Tally',)
+
+class Tally(Dispatcher):
+    """A single tally object
+
+    Properties:
+        rh_tally (TallyColor): State of the "right-hand" tally indicator
+        txt_tally (TallyColor): State of the "text" tally indicator
+        lh_tally (TallyColor): State of the "left-hand" tally indicator
+        brightness (int): Tally indicator brightness from 0 to 3
+        text (str): Text to display
+        control (bytes): Any control data received for the tally indicator
+        normalized_brightness (float): The :attr:`brightness` value normalized
+            as a float from ``0.0`` to ``1.0``
+
+    :Events:
+        .. event:: on_update(instance: Tally, props_changed: Sequence[str])
+
+            Fired when any property changes
+
+        .. event:: on_control(instance: Tally, data: bytes)
+
+            Fired when control data is received for the tally indicator
+
+    .. versionadded:: 0.0.2
+        The :event:`on_control` event
+    """
+    rh_tally = Property(TallyColor.OFF)
+    txt_tally = Property(TallyColor.OFF)
+    lh_tally = Property(TallyColor.OFF)
+    brightness = Property(3)
+    normalized_brightness = Property(1.)
+    text = Property('')
+    control = Property(b'')
+    _events_ = ['on_update', 'on_control']
+    _prop_attrs = ('rh_tally', 'txt_tally', 'lh_tally', 'brightness', 'text', 'control')
+    def __init__(self, index_, **kwargs):
+        self.__index = index_
+        self._updating_props = False
+        self.update(**kwargs)
+        self.bind(**{prop:self._on_prop_changed for prop in self._prop_attrs})
+
+    @property
+    def index(self) -> int:
+        """Index of the tally object from 0 to 65534 (``0xfffe``)
+        """
+        return self.__index
+
+    @property
+    def is_broadcast(self) -> bool:
+        """``True`` if the tally is to be "broadcast", meaning sent to all
+        :attr:`display indices<.messages.Display.index>`.
+
+        (if the :attr:`index` is ``0xffff``)
+
+        .. versionadded:: 0.0.2
+        """
+        return self.index == 0xffff
+
+    @classmethod
+    def broadcast(cls, **kwargs) -> 'Tally':
+        """Create a :attr:`broadcast <is_broadcast>` tally
+
+        (with :attr:`index` set to ``0xffff``)
+
+        .. versionadded:: 0.0.2
+        """
+        return cls(0xffff, **kwargs)
+
+    @classmethod
+    def from_display(cls, display: 'tslumd.Display') -> 'Tally':
+        """Create an instance from the given :class:`~.messages.Display` object
+        """
+        attrs = set(cls._prop_attrs)
+        if display.type.name == 'control':
+            attrs.discard('text')
+        else:
+            attrs.discard('control')
+        kw = {attr:getattr(display, attr) for attr in cls._prop_attrs}
+        return cls(display.index, **kw)
+
+    def update(self, **kwargs) -> Set[str]:
+        """Update any known properties from the given keyword-arguments
+
+        Returns:
+            set: The property names, if any, that changed
+        """
+        log_updated = kwargs.pop('LOG_UPDATED', False)
+        props_changed = set()
+        self._updating_props = True
+        for attr in self._prop_attrs:
+            if attr not in kwargs:
+                continue
+            val = kwargs[attr]
+            if getattr(self, attr) == val:
+                continue
+            props_changed.add(attr)
+            setattr(self, attr, val)
+            if attr == 'brightness':
+                self.normalized_brightness = (val + 1) / 4
+            if log_updated:
+                logger.debug(f'{self!r}.{attr} = {val!r}')
+        self._updating_props = False
+        if len(props_changed):
+            self.emit('on_update', self, props_changed)
+        return props_changed
+
+    def update_from_display(self, display: 'tslumd.messages.Display') -> Set[str]:
+        """Update this instance from the values of the given
+        :class:`~.messages.Display` object
+
+        Returns:
+            set: The property names, if any, that changed
+        """
+        attrs = set(self._prop_attrs)
+        is_control = display.type.name == 'control'
+        if is_control:
+            attrs.discard('text')
+        else:
+            attrs.discard('control')
+        kw = {attr:getattr(display, attr) for attr in attrs}
+        kw['LOG_UPDATED'] = True
+        props_changed = self.update(**kw)
+        if is_control:
+            self.emit('on_control', self, display.control)
+        return props_changed
+
+    def to_dict(self) -> Dict:
+        """Serialize to a :class:`dict`
+        """
+        d = {attr:getattr(self, attr) for attr in self._prop_attrs}
+        d['index'] = self.index
+        return d
+
+    # def to_display(self) -> 'tslumd.messages.Display':
+    #     """Create a :class:`~.messages.Display` from this instance
+    #     """
+    #     kw = self.to_dict()
+    #     return Display(**kw)
+
+    def _on_prop_changed(self, instance, value, **kwargs):
+        if self._updating_props:
+            return
+        prop = kwargs['property']
+        if prop.name == 'brightness':
+            self.normalized_brightness = (value + 1) / 4
+        self.emit('on_update', self, [prop.name])
+
+    def __eq__(self, other):
+        if not isinstance(other, Tally):
+            return NotImplemented
+        return self.to_dict() == other.to_dict()
+
+    def __ne__(self, other):
+        if not isinstance(other, Tally):
+            return NotImplemented
+        return self.to_dict() != other.to_dict()
+
+    def __repr__(self):
+        return f'<{self.__class__.__name__}: ({self})>'
+
+    def __str__(self):
+        return f'{self.index} - "{self.text}"'
