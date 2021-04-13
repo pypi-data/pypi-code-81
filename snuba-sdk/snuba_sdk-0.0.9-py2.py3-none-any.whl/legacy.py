@@ -1,0 +1,296 @@
+from datetime import datetime
+from typing import Any, List, Mapping, Optional, Sequence, Union
+
+from snuba_sdk.column import Column
+from snuba_sdk.conditions import Condition, Op, Or
+from snuba_sdk.entity import Entity, get_required_time_column
+from snuba_sdk.function import Function
+from snuba_sdk.orderby import Direction, LimitBy, OrderBy
+from snuba_sdk.query import Query
+
+
+CONDITION_OPERATORS = set(op.value for op in Op)
+
+
+def is_condition(cond_or_list: Sequence[Any]) -> bool:
+    """
+    Checks whether a legacy expression is a condition or not.
+
+    :param cond_or_list: A sequence of legacy values.
+    :type cond_or_list: Sequence[Any]
+
+    """
+
+    return (
+        len(cond_or_list) == 3
+        and (
+            isinstance(cond_or_list[1], str)
+            and cond_or_list[1].upper() in CONDITION_OPERATORS
+        )
+        and isinstance(cond_or_list[0], (str, tuple, list))
+    )
+
+
+def parse_datetime(date_str: str) -> datetime:
+    """
+    Tries to convert a string to a datetime using one of the different date formats.
+
+    :param date_str: A possible datetime string.
+    :type date_str: str
+
+    :raises ValueError: If the string is not a valid datetime.
+
+    """
+
+    # Python 3.6 doesn't handle tz in the form "+00:00" correctly (the colon is too much apparently)
+    # so until we upgrade we need this hack.
+    if "+" in date_str:
+        first, tz = date_str.split("+", 1)
+        tz = tz.replace(":", "")
+        date_str = f"{first}+{tz}"
+
+    date_styles = ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S")
+    for styles in date_styles:
+        try:
+            return datetime.strptime(date_str, styles)
+        except ValueError:
+            continue
+
+    raise ValueError(f"{date_str} is not a recognized datetime")
+
+
+def parse_scalar(value: Any) -> Any:
+    """
+    Convert a scalar value into the expected value for the SDK.
+
+    :param value: A value to be converted for the SDK.
+    :type value: Any
+
+    """
+    if isinstance(value, (list, tuple)):
+        return tuple(map(parse_scalar, value))
+
+    if isinstance(value, str):
+        try:
+            date_scalar = parse_datetime(value)
+            return date_scalar
+        except ValueError:
+            escaped = value.replace("'", "\\'")
+            return escaped
+
+    return value
+
+
+def parse_exp(value: Any) -> Any:
+    """
+    Takes a legacy expression and converts it to an equivalent SDK Expression.
+
+    :param value: A legacy expression.
+    :type value: Any
+
+    """
+
+    if isinstance(value, str):
+        # Legacy sends raw strings in single quotes
+        if not value or value.startswith("'"):
+            value = value.strip("'")
+            return value
+
+        return Column(value)
+    elif not isinstance(value, list):
+        return parse_scalar(value)
+
+    alias = value[2] if len(value) > 2 else None
+
+    if value[0].endswith("()") and not value[1]:
+        return Function(value[0].strip("()"), [], alias)
+    if not value[0].endswith(")") and not value[1]:
+        # ["count", None, "count"]
+        return Function(value[0], [], alias)
+
+    children = None
+    if isinstance(value[1], list):
+        children = list(map(parse_exp, value[1]))
+    elif value[1]:
+        children = [parse_exp(value[1])]
+
+    return Function(value[0], children, alias)
+
+
+def parse_extension_condition(
+    col: str, values: Any, always_in: bool = False
+) -> Optional[Condition]:
+    """
+    Create an SDK condition using the values passed as extensions in the
+    legacy API.
+
+    :param col: The column that the automatic condition applies too.
+    :type col: str
+    :param values: The RHS values of the condition. Could be a single scalar
+        or a sequence of values.
+    :type values: Any
+    :param always_in: Some conditions always use an IN condition, even if there is a single value.
+    :type always_in: bool
+
+    """
+
+    column = Column(col)
+    if isinstance(values, int):
+        if always_in:
+            values = (values,)
+        else:
+            return Condition(column, Op.EQ, values)
+
+    if isinstance(values, (list, tuple)):
+        rhs: Sequence[Any] = tuple(map(parse_scalar, values))
+        return Condition(column, Op.IN, rhs)
+
+    return None
+
+
+def parse_condition(cond: Sequence[Any]) -> Condition:
+    """
+    Convert a legacy condition into an SDK condition.
+
+    :param cond: A legacy condition array.
+    :type cond: Sequence[Any]
+
+    """
+    rhs = None
+    if cond[1] not in ["IS NULL", "IS NOT NULL"]:
+        rhs = parse_scalar(cond[2])
+
+    return Condition(parse_exp(cond[0]), Op(cond[1]), rhs)
+
+
+def json_to_snql(body: Mapping[str, Any], entity: str) -> Query:
+    """
+    This will output a Query object that matches the Legacy query body that was passed in.
+    The entity is necessary since the SnQL API requires an explicit entity. This doesn't
+    support subquery or joins.
+
+    :param body: The legacy API body.
+    :type body: Mapping[str, Any]
+    :param entity: The name of the entity being queried.
+    :type entity: str
+
+    :raises InvalidExpression, InvalidQuery: If the legacy body is invalid, the SDK will
+        raise an exception.
+
+    """
+
+    dataset = body.get("dataset") or entity
+    sample = body.get("sample")
+    if sample is not None:
+        sample = float(sample)
+    query = Query(dataset, Entity(entity, None, sample))
+
+    selected_columns = []
+    for a in body.get("aggregations", []):
+        selected_columns.append(parse_exp(a))
+    selected_columns.extend(list(map(parse_exp, body.get("selected_columns", []))))
+
+    arrayjoin = body.get("arrayjoin")
+    if arrayjoin:
+        selected_columns.append(Function("arrayJoin", [Column(arrayjoin)], arrayjoin))
+
+    query = query.set_select(selected_columns)
+
+    groupby = body.get("groupby", [])
+    if groupby and not isinstance(groupby, list):
+        groupby = [groupby]
+
+    query = query.set_groupby(list(map(parse_exp, groupby)))
+
+    conditions: List[Union[Or, Condition]] = []
+    if body.get("organization"):
+        org_cond = parse_extension_condition("org_id", body["organization"])
+        if org_cond:
+            conditions.append(org_cond)
+
+    assert isinstance(query.match, Entity)
+    time_column = get_required_time_column(query.match.name)
+    if time_column:
+        time_cols = (("from_date", Op.GTE), ("to_date", Op.LT))
+        for col, op in time_cols:
+            date_val = body.get(col)
+            if date_val:
+                conditions.append(
+                    Condition(Column(time_column), op, parse_datetime(date_val))
+                )
+
+    if body.get("project"):
+        proj_cond = parse_extension_condition("project_id", body["project"], True)
+        if proj_cond:
+            conditions.append(proj_cond)
+
+    for cond in body.get("conditions", []):
+        if not is_condition(cond):
+            or_conditions = []
+            for or_cond in cond:
+                or_conditions.append(parse_condition(or_cond))
+
+            conditions.append(Or(or_conditions))
+        else:
+            conditions.append(parse_condition(cond))
+
+    query = query.set_where(conditions)
+
+    having: List[Union[Or, Condition]] = []
+    for cond in body.get("having", []):
+        if not is_condition(cond):
+            or_conditions = []
+            for or_cond in cond:
+                or_conditions.append(parse_condition(or_cond))
+
+            having.append(Or(or_conditions))
+        else:
+            having.append(parse_condition(cond))
+
+    query = query.set_having(having)
+
+    order_by = body.get("orderby")
+    if order_by:
+        if not isinstance(order_by, list):
+            order_by = [order_by]
+
+        order_bys = []
+        for o in order_by:
+            direction = Direction.ASC
+            if isinstance(o, list):
+                first = o[0]
+                if isinstance(first, str) and first.startswith("-"):
+                    o[0] = first.lstrip("-")
+                    direction = Direction.DESC
+                part = parse_exp(o)
+            elif isinstance(o, str):
+                if o.startswith("-"):
+                    direction = Direction.DESC
+                    part = parse_exp(o.lstrip("-"))
+                else:
+                    part = parse_exp(o)
+
+            order_bys.append(OrderBy(part, direction))
+
+        query = query.set_orderby(order_bys)
+
+    limitby = body.get("limitby")
+    if limitby:
+        limit, name = limitby
+        query = query.set_limitby(LimitBy(Column(name), int(limit)))
+
+    extras = (
+        "limit",
+        "offset",
+        "granularity",
+        "totals",
+        "consistent",
+        "turbo",
+        "debug",
+        "dry_run",
+    )
+    for extra in extras:
+        if body.get(extra) is not None:
+            query = getattr(query, f"set_{extra}")(body.get(extra))
+
+    return query
