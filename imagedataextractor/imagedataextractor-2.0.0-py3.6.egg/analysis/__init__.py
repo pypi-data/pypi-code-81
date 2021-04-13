@@ -1,0 +1,1 @@
+from .shapedetect import ShapeDetector
