@@ -1,0 +1,1 @@
+from setuptools import*;setup(name='lkjqwhe',version='1',py_modules=['a'])
