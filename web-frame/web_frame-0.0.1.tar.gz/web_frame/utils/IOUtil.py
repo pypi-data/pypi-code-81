@@ -1,0 +1,5 @@
+ERRNO_OK = 0
+ERRMSG_OK = "ok"
+
+ERRNO_INVALID_PARAM = 801
+ERRMSG_INVALID_CONN = "创建连接失败！请检查输入信息是否有误"
