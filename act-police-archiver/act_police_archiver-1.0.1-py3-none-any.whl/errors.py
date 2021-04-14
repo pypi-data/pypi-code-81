@@ -1,0 +1,2 @@
+class ImgFail(Exception):
+    pass
