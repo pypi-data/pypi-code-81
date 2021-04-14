@@ -1,0 +1,2 @@
+class Continuous:
+    pass

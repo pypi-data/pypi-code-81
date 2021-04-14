@@ -1,0 +1,2 @@
+class Ready:
+    pass
