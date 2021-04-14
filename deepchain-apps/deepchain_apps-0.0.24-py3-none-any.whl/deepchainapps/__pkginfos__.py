@@ -1,0 +1,5 @@
+"numpy==1.20.1"
+"tensorflow==2.1.0"
+"esm==0.3.0"
+"torch==1.5.0"
+"dataclasses==0.8"
