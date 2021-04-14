@@ -1,0 +1,1 @@
+from deci_client.rtic.serialization.numpy_serializer import ClientNumpySerializer
