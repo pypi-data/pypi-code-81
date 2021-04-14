@@ -1,0 +1,20 @@
+#!/usr/bin/env python
+# coding: utf-8
+"""Tool to import optional dependencies. Inspired by similar code in pandas."""
+
+import importlib
+
+def import_optional_dependency(module_name: str, package_name: str = None):
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError:
+        if package_name is None:
+            package_name = module_name
+
+        message = (
+            f"Missing optional dependency '{module_name}'. "
+            f"Use pip or conda to install {package_name}."
+        )
+        raise ImportError(message) from None
+
+    return module
