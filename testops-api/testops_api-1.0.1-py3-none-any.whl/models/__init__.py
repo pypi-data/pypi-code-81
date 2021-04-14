@@ -1,0 +1,89 @@
+# flake8: noqa
+
+# import all models into this package
+# if you have many models here with many references from one model to another this may
+# raise a RecursionError
+# to avoid this, import only the models that you directly need like:
+# from from testops_api.model.pet import Pet
+# or import this package, but before doing it, use:
+# import sys
+# sys.setrecursionlimit(n)
+
+from testops_api.model.agent_config_resource import AgentConfigResource
+from testops_api.model.agent_resource import AgentResource
+from testops_api.model.build_info import BuildInfo
+from testops_api.model.build_log import BuildLog
+from testops_api.model.circle_ci_agent_resource import CircleCIAgentResource
+from testops_api.model.circle_ci_connection_resource import CircleCIConnectionResource
+from testops_api.model.circle_ci_project import CircleCIProject
+from testops_api.model.comment_resource import CommentResource
+from testops_api.model.config_resource import ConfigResource
+from testops_api.model.environment_variable import EnvironmentVariable
+from testops_api.model.execution_request_resource import ExecutionRequestResource
+from testops_api.model.execution_resource import ExecutionResource
+from testops_api.model.execution_share_report_resource import ExecutionShareReportResource
+from testops_api.model.execution_test_case_resource import ExecutionTestCaseResource
+from testops_api.model.execution_test_result_identify_resource import ExecutionTestResultIdentifyResource
+from testops_api.model.execution_test_result_resource import ExecutionTestResultResource
+from testops_api.model.execution_test_suite_resource import ExecutionTestSuiteResource
+from testops_api.model.external_issue_resource import ExternalIssueResource
+from testops_api.model.external_project_resource import ExternalProjectResource
+from testops_api.model.external_release_resource import ExternalReleaseResource
+from testops_api.model.file_resource import FileResource
+from testops_api.model.git_repository_resource import GitRepositoryResource
+from testops_api.model.incident_execution_test_result_resource import IncidentExecutionTestResultResource
+from testops_api.model.incident_resource import IncidentResource
+from testops_api.model.job_resource import JobResource
+from testops_api.model.k8_s_agent_resource import K8SAgentResource
+from testops_api.model.local_time import LocalTime
+from testops_api.model.organization_feature_flag_resource import OrganizationFeatureFlagResource
+from testops_api.model.organization_resource import OrganizationResource
+from testops_api.model.organization_trial_request_resource import OrganizationTrialRequestResource
+from testops_api.model.page_base_resource import PageBaseResource
+from testops_api.model.page_execution_resource import PageExecutionResource
+from testops_api.model.page_job_resource import PageJobResource
+from testops_api.model.page_project_resource import PageProjectResource
+from testops_api.model.page_team_resource import PageTeamResource
+from testops_api.model.pageable import Pageable
+from testops_api.model.platform_resource import PlatformResource
+from testops_api.model.project_configuration_resource import ProjectConfigurationResource
+from testops_api.model.project_resource import ProjectResource
+from testops_api.model.project_setting_resource import ProjectSettingResource
+from testops_api.model.release_resource import ReleaseResource
+from testops_api.model.release_statistics_resource import ReleaseStatisticsResource
+from testops_api.model.run_configuration_resource import RunConfigurationResource
+from testops_api.model.scheduler_resource import SchedulerResource
+from testops_api.model.search_config_resource import SearchConfigResource
+from testops_api.model.search_request import SearchRequest
+from testops_api.model.search_request_condition import SearchRequestCondition
+from testops_api.model.search_request_function import SearchRequestFunction
+from testops_api.model.search_request_pagination import SearchRequestPagination
+from testops_api.model.search_request_sort_order import SearchRequestSortOrder
+from testops_api.model.sort import Sort
+from testops_api.model.team_resource import TeamResource
+from testops_api.model.test_case_platform_statistics_resource import TestCasePlatformStatisticsResource
+from testops_api.model.test_case_resource import TestCaseResource
+from testops_api.model.test_object_entity_resource import TestObjectEntityResource
+from testops_api.model.test_object_resource import TestObjectResource
+from testops_api.model.test_project_resource import TestProjectResource
+from testops_api.model.test_result_assertion_failed_resource import TestResultAssertionFailedResource
+from testops_api.model.test_result_assertion_resource import TestResultAssertionResource
+from testops_api.model.test_run_result import TestRunResult
+from testops_api.model.test_suite_collection_entity_resource import TestSuiteCollectionEntityResource
+from testops_api.model.test_suite_collection_resource import TestSuiteCollectionResource
+from testops_api.model.test_suite_resource import TestSuiteResource
+from testops_api.model.time_zone_resource import TimeZoneResource
+from testops_api.model.time_zone_resource_offset import TimeZoneResourceOffset
+from testops_api.model.time_zone_resource_offset_rules import TimeZoneResourceOffsetRules
+from testops_api.model.time_zone_resource_offset_rules_duration import TimeZoneResourceOffsetRulesDuration
+from testops_api.model.time_zone_resource_offset_rules_duration_units import TimeZoneResourceOffsetRulesDurationUnits
+from testops_api.model.time_zone_resource_offset_rules_transition_rules import TimeZoneResourceOffsetRulesTransitionRules
+from testops_api.model.time_zone_resource_offset_rules_transitions import TimeZoneResourceOffsetRulesTransitions
+from testops_api.model.trigger_build_parameter import TriggerBuildParameter
+from testops_api.model.upload_batch_file_resource import UploadBatchFileResource
+from testops_api.model.upload_batch_resource import UploadBatchResource
+from testops_api.model.upload_file_resource import UploadFileResource
+from testops_api.model.user_organization_feature_resource import UserOrganizationFeatureResource
+from testops_api.model.user_resource import UserResource
+from testops_api.model.user_setting_resource import UserSettingResource
+from testops_api.model.user_team_resource import UserTeamResource
