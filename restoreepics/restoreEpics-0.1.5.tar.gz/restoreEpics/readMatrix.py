@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+
+from epics import caget
+import numpy as np
+import argparse
+
+
+def readMatrix(basename, rows, cols, firstRow=1, firstCol=1, suffix=None):
+    '''
+    Reads epics channels to put matrix on a EPICS channel matrix.
+    '''
+    inpMat = np.zeros((rows, cols))
+    for ii in range(firstRow, firstRow + rows):
+        for jj in range(firstCol, firstCol + cols):
+            chName = basename + '_' + str(ii) + '_' + str(jj)
+            if suffix is not None:
+                chName = chName + '_' + suffix
+            inpMat[ii - firstRow, jj-firstCol] = caget(chName)
+    return inpMat
+
+
+def grabInputArgs():
+    parser = argparse.ArgumentParser(
+        description='This writes matrix coefficients from a text file to '
+                    'EPICS channels. Note that all indices start from 1 by '
+                    'convention for EPICS channels.'
+        )
+    parser.add_argument('basename', type=str, help='Matrix EPICS base name')
+    parser.add_argument('inMatFile', type=str, help='Input Matrix file name')
+    parser.add_argument('rows', type=int,
+                        help='Number of rows to read. Default None(all)',
+                        default=None)
+    parser.add_argument('cols', type=int,
+                        help='Number of columns to read. Default None(all)',
+                        default=None)
+    parser.add_argument('--firstRow', type=int,
+                        help='First index of output. Default 1',
+                        default=1)
+    parser.add_argument('--firstCol', type=int,
+                        help='First index of input. Default 1',
+                        default=1)
+    parser.add_argument('-s', '--suffix', type=str,
+                        help='Any suffix after the matrix indices in channel '
+                             'names. Default is None.')
+
+    return parser.parse_args()
+
+
+if __name__ == '__main__':
+    args = grabInputArgs()
+    inpMat = readMatrix(args.basename, args.rows, args.cols, args.firstRow,
+                        args.firstCol, args.suffix)
+    inpMat = np.savetxt(args.inMatFile, inpMat)
