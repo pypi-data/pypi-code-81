@@ -1,0 +1,1 @@
+from . import qywx_app_message
