@@ -1,0 +1,2 @@
+class Minimum:
+    pass
