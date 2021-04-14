@@ -1,0 +1,191 @@
+import copy
+from collections import defaultdict
+import string
+import re
+from collections import Counter
+
+from tfkit.utility import tok
+from tqdm.auto import tqdm
+
+
+def _normalize_answer(s, task='emf1'):
+    """Lower text and remove punctuation, articles and extra whitespace."""
+
+    def remove_articles(text):
+        if len(text) > 1:
+            return re.sub(r'\b(a|an|the)\b', ' ', text)
+        else:
+            return text
+
+    def white_space_fix(text):
+        return ' '.join(text.split())
+
+    def remove_punc(text):
+        exclude = set(string.punctuation)
+        return ''.join(ch for ch in text if ch not in exclude)
+
+    def lower(text):
+        return text.lower()
+
+    if task == 'emf1':
+        return white_space_fix(remove_articles(remove_punc(lower(s))))
+    else:
+        return white_space_fix((remove_punc(lower(s))))
+
+
+def _f1_score(prediction, ground_truth):
+    prediction_tokens = _normalize_answer(prediction).split()
+    ground_truth_tokens = _normalize_answer(ground_truth).split()
+    common = Counter(prediction_tokens) & Counter(ground_truth_tokens)
+    num_same = sum(common.values())
+    if num_same == 0:
+        return 0
+    precision = 1.0 * num_same / len(prediction_tokens)
+    recall = 1.0 * num_same / len(ground_truth_tokens)
+    f1 = (2 * precision * recall) / (precision + recall)
+    return f1
+
+
+class EvalMetric:
+
+    def __init__(self, tokenizer, max_candidate=6):
+        self.tasks = defaultdict(lambda: defaultdict(list))
+        self.max_candidate = max_candidate
+        self.tokenizer = tokenizer
+        self.target_list = defaultdict(lambda: defaultdict(int))
+
+    def tokenize_text(self, text):
+        text = self.tokenizer.convert_tokens_to_string(self.tokenizer.tokenize(text))
+        text = text.replace(tok.tok_sep(self.tokenizer), " ")
+        # return  _normalize_answer(text, task='others')  # remove punctuation
+        # keep punctuation
+        text = "".join(
+            (char if char.isalpha() or char == " " else " " + char + " ") for char in text)  # separate punctuation
+        text = ' '.join(text.split()).lower().strip()  # remove extra blank
+        return text
+
+    def add_record(self, ori_input, ori_predicted, ori_target, task='default'):
+        input = predicted = target = ""
+        input_list = predicted_list = target_list = []
+
+        if isinstance(ori_input, str):
+            input = self.tokenize_text(ori_input.strip())
+            input_list = [input]
+        if isinstance(ori_input, list):
+            input_list = copy.copy(ori_input)
+            for i, t in enumerate(ori_input):
+                input_list[i] = self.tokenize_text(t.strip())
+            input = " ".join(input_list)
+
+        if isinstance(ori_predicted, str):
+            predicted = self.tokenize_text(ori_predicted)
+            predicted_list = [predicted]
+        if isinstance(ori_predicted, list):
+            predicted_list = copy.copy(ori_predicted)
+            for i, t in enumerate(ori_predicted):
+                predicted_list[i] = self.tokenize_text(t.strip())
+            predicted = " ".join(predicted_list)
+
+        if isinstance(ori_target, str):
+            target_list = []
+            if tok.UNIVERSAL_SEP in ori_target:
+                target = ori_target
+                target_list.extend([self.tokenize_text(st.strip()) for st in ori_target.split(tok.UNIVERSAL_SEP)])
+            else:
+                target = self.tokenize_text(ori_target.strip())
+                target_list.append(target)
+        elif isinstance(ori_target, list):
+            for i, t in enumerate(ori_target):
+                ori_target[i] = self.tokenize_text(t.strip())
+            target_list = ori_target
+
+        if self.max_candidate - len(target_list) > 0 and "nlg" in task:
+            target_list.extend([""] * (self.max_candidate - len(target_list)))
+
+        for t in target_list:
+            self.target_list[task][t] += 1
+
+        self.tasks[task]['input'].append(input)
+        self.tasks[task]['input_list'].append(input_list)
+        self.tasks[task]['predicted'].append(predicted)
+        self.tasks[task]['predicted_list'].append(predicted_list)
+        self.tasks[task]['target'].append(target)
+        self.tasks[task]['target_list'].append(target_list)
+        self.tasks[task]['ori_input'].append(ori_input)
+        self.tasks[task]['ori_predicted'].append(ori_predicted)
+        self.tasks[task]['ori_target'].append(ori_target)
+
+    def get_record(self, task='default'):
+        return self.tasks[task]
+
+    def cal_score(self, metric):
+        data_score = []
+        for task_name, task in self.tasks.items():
+            print("Task : " + task_name + " report ")
+            if "emf1" in metric:
+                em = 0
+                total = 0
+                f1 = 0
+                for pos, predict in enumerate(task['predicted']):
+                    em_list = []
+                    f1_list = []
+                    for target in task['target_list'][pos]:
+                        if _normalize_answer(str(predict)) == _normalize_answer(str(target)) and len(
+                                _normalize_answer(str(predict))) > 0 or len(str(predict)) == len(str(target)) == 0:
+                            em_score = 1
+                            f1_score = 1
+                        else:
+                            em_score = 0
+                            f1_score = _f1_score(str(predict), str(target))
+                        em_list.append(em_score)
+                        f1_list.append(f1_score)
+                    em += max(em_list)
+                    f1 += max(f1_list)
+                    data_score.append([predict, task['target_list'][pos][em_list.index(max(em_list))],
+                                       {'em': max(em_list), 'f1': max(f1_list)}])
+                    total += 1
+                result = {"EM": em / (total or not total), "F1": f1 / (total or not total)}
+                data_score = sorted(data_score, key=lambda i: i[2]['em'], reverse=True)
+            if "nlg" in metric:
+                try:
+                    from nlgeval import NLGEval
+                except ImportError:
+                    print(
+                        "nlg-eval package not install, plz install it: pip install git+https://github.com/voidful/nlg-eval.git ; nlg-eval --setup ./nlg-eval-data/")
+                    raise
+                nlgeval = NLGEval(no_skipthoughts=True, no_glove=True, metrics_to_omit=["METEOR"])
+                target_list = task['target_list']
+                predicted = task['predicted']
+                for t, p in tqdm(zip(target_list, predicted), total=len(target_list)):
+                    data_score.append([p, t, nlgeval.compute_metrics(ref_list=list(map(list, zip(t))), hyp_list=[p])])
+                result = nlgeval.compute_metrics(ref_list=list(map(list, zip(*task['target_list']))),  # transpose
+                                                 hyp_list=predicted)
+                data_score = sorted(data_score, key=lambda i: i[2]['ROUGE_L'])
+            if "clas" in metric:
+                from sklearn.metrics import classification_report
+                from sklearn.preprocessing import MultiLabelBinarizer
+                from sklearn.metrics import precision_recall_fscore_support
+                target_key = [t for t in self.target_list[task_name].keys() if len(t) > 0]
+                mlb = MultiLabelBinarizer().fit([target_key])
+                # remove all blank target
+                task['target_list'] = [[j for j in sub if len(j) > 0] for sub in task['target_list']]
+                # modify for tagging result
+                if isinstance(task['predicted_list'][0][0], list):
+                    task['target_list'] = sum([[[j] for j in sub] for sub in task['target_list']], [])
+                    task['predicted_list'] = sum([[[j] for j in sub] for sub in task['predicted']], [])
+                    if len(task['target_list']) != len(task['predicted_list']):
+                        diff = len(task['target_list']) - len(task['predicted_list'])
+                        task['predicted_list'].extend([['']] * diff)
+                target_list = task['target_list']
+                predicted = task['predicted_list']
+                for p, t in zip(predicted, target_list):
+                    score = dict(zip(["precision", "recall", "fbeta_score", "support"],
+                                     precision_recall_fscore_support(mlb.transform([t]), mlb.transform([p]),
+                                                                     average='weighted')))
+                    data_score.append([p, t, score])
+                result = classification_report(
+                    mlb.transform(target_list),
+                    mlb.transform(predicted),
+                    target_names=list(mlb.classes_))
+                data_score = sorted(data_score, key=lambda i: i[2]['fbeta_score'])
+            yield (task_name, result, data_score)
