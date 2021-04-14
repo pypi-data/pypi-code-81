@@ -1,0 +1,77 @@
+import os
+import typer
+import shutil
+import subprocess
+from fdriver.generator import files,app_files
+
+app = typer.Typer()
+
+# command to create project
+@app.command(help="To create a new Project")
+def init(name: str):
+
+    try:
+        create_folder(name)
+        with open(f"./{list(files.keys())[0]}", 'w') as file:
+            file.write(str(files[list(files.keys())[0]]).format(name))
+        create_files(name, files,1)
+        typer.secho(f"Created project {name} successfully 🎉🎉🎉.\ncd {name}", fg=typer.colors.GREEN)
+    except FileExistsError:
+        typer.secho(f" File {name} exist  😞", fg=typer.colors.RED)
+
+# command to start to create app modular
+@app.command(help="To start Application in your Project")
+def startapp(name: str):
+    try:
+        if os.path.isfile("server.py"):
+            create_folder(name)
+            create_files(name, app_files,2)
+            typer.secho(f"Created module {name} successfully 🎉🎉🎉", fg=typer.colors.GREEN)
+        else:
+            typer.secho(f"You have to create project before to create app 😞 ", fg=typer.colors.RED)
+    except FileExistsError:
+        typer.secho(f" File {name} exist ", fg=typer.colors.RED)
+
+# command to remove app
+@app.command(help="Remove Application")
+def remove(name: str):
+    ask = typer.prompt("Are you sur ?  yes(y) or no(n) ")
+    try:
+        if ask.lower() in ["y", "yes"]:
+            shutil.rmtree(os.path.join(os.getcwd(), name))
+            os.remove("server.py")
+            typer.echo(f"Removed successfully {name} 😞")
+        else:
+            typer.secho(f"Canceled  successfully ", fg=typer.colors.GREEN)
+    except FileNotFoundError:
+        typer.echo("No such file or directory 😞")
+
+#allow to run fastapi server
+@app.command(help="Run a FastAPI Server.")
+def run(prod: bool = typer.Option(False)):
+    args = []
+    if not prod:
+        args.append("--reload")
+    app_file = os.getenv("FASTAPI_APP", "server")
+    subprocess.call(["uvicorn", f"{app_file}:app", *args])
+
+# create folders
+def create_folder(name):
+    os.mkdir(os.path.join(os.getcwd(), name))
+    # os.mkdir(os.path.join(os.getcwd(), name+f"/{name}"))
+
+# create some files
+def create_files(name, data,number):
+    with open(f"./{name}/__init__.py", 'w') as file:
+        pass
+    for i in range(number, (len(data))):
+        if i==(len(data)-1):
+            with open(f"./{name}/{list(data.keys())[i]}", 'w') as file:
+                file.write(str(data[list(data.keys())[i]]).format(name))
+        else:
+            with open(f"./{name}/{list(data.keys())[i]}", 'w') as file:
+                file.write(data[list(data.keys())[i]])
+
+# we run this app in this if statement
+if __name__ == "__main__":
+    app()
