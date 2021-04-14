@@ -1,0 +1,5 @@
+"""Top-level package for model_reduction."""
+
+__author__ = """Meghna Sarah Thomas"""
+__email__ = 'meghnathomas@utexas.edu'
+__version__ = '0.1.0'
