@@ -1,0 +1,1 @@
+from GoesLogging.logging import logMe
