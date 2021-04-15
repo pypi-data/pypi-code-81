@@ -1,0 +1,1 @@
+__all__=["coupon_info_model","coupon_machine_model",]
