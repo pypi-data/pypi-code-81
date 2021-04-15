@@ -1,0 +1,42 @@
+from typing import Any, Dict, Type, TypeVar, Union
+
+import attr
+
+from ..types import UNSET, Unset
+
+T = TypeVar("T", bound="AutoCompleteSuggestion")
+
+
+@attr.s(auto_attribs=True)
+class AutoCompleteSuggestion:
+    """ A field auto-complete suggestion. """
+
+    value: Union[Unset, str] = UNSET
+    display_name: Union[Unset, str] = UNSET
+
+    def to_dict(self) -> Dict[str, Any]:
+        value = self.value
+        display_name = self.display_name
+
+        field_dict: Dict[str, Any] = {}
+        field_dict.update({})
+        if value is not UNSET:
+            field_dict["value"] = value
+        if display_name is not UNSET:
+            field_dict["displayName"] = display_name
+
+        return field_dict
+
+    @classmethod
+    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+        d = src_dict.copy()
+        value = d.pop("value", UNSET)
+
+        display_name = d.pop("displayName", UNSET)
+
+        auto_complete_suggestion = cls(
+            value=value,
+            display_name=display_name,
+        )
+
+        return auto_complete_suggestion
