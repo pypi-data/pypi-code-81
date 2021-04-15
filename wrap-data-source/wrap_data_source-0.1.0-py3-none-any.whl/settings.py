@@ -1,0 +1,1 @@
+PYGAME_SUPPORTS_IMAGE_EXTS=[".bmp", ".jpg", ".jpeg", ".png", ".gif"]
