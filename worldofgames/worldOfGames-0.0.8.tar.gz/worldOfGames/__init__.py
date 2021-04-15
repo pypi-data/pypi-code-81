@@ -1,0 +1,1 @@
+from worldOfGames.Live import play
