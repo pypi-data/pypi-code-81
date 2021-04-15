@@ -1,0 +1,1 @@
+from obsscenetransporter.scenecollection import ObsStudioSceneCollection, main
