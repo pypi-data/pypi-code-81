@@ -1,0 +1,17 @@
+from glouton.infrastructure.satnogClient import SatnogClient
+import os
+import requests
+
+
+class SatnogDbClient(SatnogClient):
+    def __init__(self):
+        SatnogClient.__init__(self)
+        self._url = self.config['DEFAULT']['DB_API_URL']
+        if "SATNOGS_DB_API_URL" in os.environ:
+            self._url = os.environ['SATNOGS_DB_API_URL']
+
+    def get(self, url, params=None):
+        return requests.get(url, params=params, proxies=self.proxies, headers=self.header)
+
+    def get_from_base(self, url, params=None):
+        return requests.get(self._url + url, params=params, proxies=self.proxies, headers=self.header)
