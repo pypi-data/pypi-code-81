@@ -1,0 +1,35 @@
+global iFlag_debug
+global iFlag_branch
+global iFlag_continue
+global iFlag_resubmit
+global iFlag_short
+global iCase_index
+global sCase
+global sFilename_clm_namelist
+global sModel
+global sDirectory_case
+global sDirectory_run
+global sCIME_directory
+global RES
+global COMPSET
+global PROJECT
+global MACH
+
+global iYear_start
+global iYear_end
+global iYear_data_start
+global iYear_data_end
+global nmonth
+global sRegion
+global dConversion
+global sVariable
+global sFilename_mask
+
+global sWorkspace_analysis
+global sWorkspace_cases
+global sWorkspace_case
+global sWorkspace_analysis_case
+global sWorkspace_simulation_case
+global sWorkspace_simulation_case_build
+global sWorkspace_simulation_case_run
+global sWorkspace_forcing
