@@ -1,0 +1,69 @@
+import typing
+import logging
+
+from apache_beam import Pipeline
+from apache_beam.options.pipeline_options import PipelineOptions, GoogleCloudOptions
+
+from bigflow.commons import public
+from bigflow.workflow import Job, JobContext
+from bigflow.workflow import DEFAULT_EXECUTION_TIMEOUT_IN_SECONDS, DEFAULT_PIPELINE_LEVEL_EXECUTION_TIMEOUT_SHIFT_IN_SECONDS
+
+logger = logging.getLogger(__file__)
+
+
+@public()
+class BeamJob(Job):
+
+    def __init__(
+            self,
+            id: str,
+            entry_point: typing.Callable[[Pipeline, JobContext, dict], None],
+            pipeline_options: PipelineOptions = None,
+            entry_point_arguments: typing.Optional[dict] = None,
+            wait_until_finish: bool = True,
+            execution_timeout_sec: int = DEFAULT_EXECUTION_TIMEOUT_IN_SECONDS,
+            test_pipeline: Pipeline = None,
+    ):
+        if bool(test_pipeline) == bool(pipeline_options):
+            raise ValueError("One of the pipeline and pipeline_options must be provided.")
+        if not wait_until_finish and execution_timeout_sec:
+            raise ValueError("If wait_until_finish_set to False execution_timeout can not be used.")
+
+        self.id = id
+        self.entry_point = entry_point
+        self.entry_point_arguments = entry_point_arguments
+        self.pipeline_options = pipeline_options
+        self.wait_until_finish = wait_until_finish
+        self.pipeline = test_pipeline
+        self.execution_timeout_sec = execution_timeout_sec
+        self.pipeline_level_execution_timeout_shift = DEFAULT_PIPELINE_LEVEL_EXECUTION_TIMEOUT_SHIFT_IN_SECONDS
+
+    def execute(self, context: JobContext):
+        if self.pipeline:
+            pipeline = self.pipeline
+        else:
+            if context.workflow:
+                self.pipeline_options = self._apply_logging(self.pipeline_options, context.workflow.workflow_id)
+            else:
+                logger.info("A workflow not found in the context. Skipping logging initialization.")
+            pipeline = self._create_pipeline(self.pipeline_options)
+        self.entry_point(pipeline, context, self.entry_point_arguments)
+        result = pipeline.run()
+        if self.wait_until_finish and self.execution_timeout_sec:
+            timeout_in_milliseconds = 1000 * (self.execution_timeout_sec - self.pipeline_level_execution_timeout_shift)
+            result.wait_until_finish(timeout_in_milliseconds)
+            if not result.is_in_terminal_state():
+                result.cancel()
+                raise RuntimeError(f'Job {self.id} timed out ({self.execution_timeout_sec})')
+
+    def _create_pipeline(self, options):
+        return Pipeline(options=options)
+
+    @staticmethod
+    def _apply_logging(pipeline_options: PipelineOptions, workflow_id: str) -> PipelineOptions:
+        google_cloud_options = pipeline_options.view_as(GoogleCloudOptions)
+        if not google_cloud_options.labels:
+            google_cloud_options.labels = []
+        google_cloud_options.labels.append(f'workflow_id={workflow_id}')
+        return pipeline_options
+
