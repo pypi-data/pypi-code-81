@@ -1,0 +1,35 @@
+import time
+
+import log
+import pomace
+
+from . import Script
+
+
+class MyPillow(Script):
+
+    URL = "https://www.mypillow.com/"
+
+    def run(self, page) -> pomace.Page:
+        person = pomace.fake.person
+
+        log.info("Clearing cookies")
+        pomace.shared.browser.cookies.delete()
+        page = pomace.visit(self.URL)
+
+        log.debug("Waiting for modal...")
+        for _ in range(10):
+            time.sleep(0.5)
+            modal = pomace.shared.browser.find_by_id("ltkpopup-content")
+            if modal and modal.visible:
+                break
+        else:
+            log.warn("No modal found")
+
+        log.info(f"Submitting phone number: {person.phone}")
+        page.fill_phone(person.phone)
+        page = page.click_submit()
+        return page
+
+    def check(self, page) -> bool:
+        return "Thank you!" in page
