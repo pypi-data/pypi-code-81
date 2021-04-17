@@ -1,0 +1,858 @@
+# -*- coding: utf-8 -*-
+import os
+import json
+import fido
+import time
+import warnings
+import pandas as pd
+import plotly.io as pio
+
+try:
+    from tqdm.notebook import tqdm
+except ImportError:
+    from tqdm import tqdm
+
+from hashlib import md5
+from pathlib import Path
+from copy import deepcopy
+from filetype import guess
+from flatten_dict import flatten, unflatten
+from base64 import b64encode, b64decode
+from urllib.parse import urlparse
+from pyisemail import is_email
+from collections import defaultdict
+from ratelimit import limits, sleep_and_retry
+from pyisemail.diagnosis import BaseDiagnosis
+from swagger_spec_validator.common import SwaggerValidationError
+from bravado_core.formatter import SwaggerFormat
+from bravado.client import SwaggerClient
+from bravado.fido_client import FidoClient  # async
+from bravado.http_future import HttpFuture
+from bravado.swagger_model import Loader
+from bravado.config import bravado_config_from_config_dict
+from bravado_core.spec import Spec
+from json2html import Json2Html
+from IPython.display import display, HTML, Image, FileLink
+from boltons.iterutils import remap
+from pymatgen.core import Structure
+from concurrent.futures import as_completed
+from requests_futures.sessions import FuturesSession
+from filetype.types.archive import Gz
+from filetype.types.image import Jpeg, Png, Gif, Tiff
+from pint import UnitRegistry
+from pint.unit import UnitDefinition
+from pint.converters import ScaleConverter
+
+
+MAX_WORKERS = 10
+MAX_ELEMS = 10
+MAX_BYTES = 200 * 1024
+DEFAULT_HOST = "contribs-api.materialsproject.org"
+BULMA = "is-narrow is-fullwidth has-background-light"
+PROVIDERS = {"github", "google", "facebook", "microsoft", "amazon"}
+COMPONENTS = {"structures", "tables", "attachments"}
+VALID_URLS = {f"http://{h}:{p}" for h in ["localhost", "contribs-api"] for p in [5000, 5002, 5003]}
+VALID_URLS |= {f"https://{n}-api.materialsproject.org" for n in ["contribs", "lightsources", "ml"]}
+VALID_URLS |= {
+    f"http://localhost.{n}-api.materialsproject.org" for n in ["contribs", "lightsources", "ml"]
+}
+SUPPORTED_FILETYPES = (Gz, Jpeg, Png, Gif, Tiff)
+SUPPORTED_MIMES = [t().mime for t in SUPPORTED_FILETYPES]
+
+j2h = Json2Html()
+pd.options.plotting.backend = "plotly"
+pio.templates.default = "simple_white"
+warnings.formatwarning = lambda msg, *args, **kwargs: f"{msg}\n"
+warnings.filterwarnings("default", category=DeprecationWarning, module=__name__)
+
+ureg = UnitRegistry(
+    autoconvert_offset_to_baseunit=True,
+    preprocessors=[
+        lambda s: s.replace("%%", " permille "),
+        lambda s: s.replace("%", " percent "),
+    ],
+)
+ureg.define(UnitDefinition("percent", "%", (), ScaleConverter(0.01)))
+ureg.define(UnitDefinition("permille", "%%", (), ScaleConverter(0.001)))
+ureg.define(UnitDefinition("ppm", "ppm", (), ScaleConverter(1e-6)))
+ureg.define(UnitDefinition("ppb", "ppb", (), ScaleConverter(1e-9)))
+ureg.define("atom = 1")
+ureg.define("bohr_magneton = e * hbar / (2 * m_e) = µᵇ = µ_B = mu_B")
+ureg.define("electron_mass = 9.1093837015e-31 kg = mₑ = m_e")
+
+
+def get_md5(d):
+    s = json.dumps(d, sort_keys=True).encode("utf-8")
+    return md5(s).hexdigest()
+
+
+def validate_email(email_string):
+    if email_string.count(":") != 1:
+        raise SwaggerValidationError(f"{email_string} not of format <provider>:<email>.")
+
+    provider, email = email_string.split(":", 1)
+    if provider not in PROVIDERS:
+        raise SwaggerValidationError(f"{provider} is not a valid provider.")
+
+    d = is_email(email, diagnose=True)
+    if d > BaseDiagnosis.CATEGORIES["VALID"]:
+        raise SwaggerValidationError(f"{email} {d.message}")
+
+
+email_format = SwaggerFormat(
+    format="email",
+    to_wire=str,
+    to_python=str,
+    validate=validate_email,
+    description="e-mail address including provider",
+)
+
+
+def validate_url(url_string, qualifying=("scheme", "netloc")):
+    tokens = urlparse(url_string)
+    if not all([getattr(tokens, qual_attr) for qual_attr in qualifying]):
+        raise SwaggerValidationError(f"{url_string} invalid")
+
+
+url_format = SwaggerFormat(
+    format="url", to_wire=str, to_python=str, validate=validate_url, description="URL",
+)
+
+
+def chunks(lst, n=250):
+    if isinstance(lst, set):
+        lst = list(lst)
+    elif not isinstance(lst, list):
+        raise ValueError("chunks needs list or set as input")
+
+    n = max(1, n)
+    for i in range(0, len(lst), n):
+        to = i + n
+        yield lst[i:to]
+
+
+class FidoClientGlobalHeaders(FidoClient):
+    def __init__(self, headers=None):
+        super().__init__()
+        self.headers = headers or {}
+
+    def request(self, request_params, operation=None, request_config=None):
+        request_for_twisted = self.prepare_request_for_twisted(request_params)
+        request_for_twisted["headers"].update(self.headers)
+        future_adapter = self.future_adapter_class(fido.fetch(**request_for_twisted))
+        return HttpFuture(
+            future_adapter, self.response_adapter_class, operation, request_config
+        )
+
+
+def visit(path, key, value):
+    if isinstance(value, dict) and "display" in value:
+        return key, value["display"]
+    return True
+
+
+class Dict(dict):
+    def pretty(self, attrs=f'class="table {BULMA}"'):
+        return display(
+            HTML(j2h.convert(json=remap(self, visit=visit), table_attributes=attrs))
+        )
+
+
+class Attachment(dict):
+    def pretty(self):
+        content = b64decode(self["content"], validate=True)
+
+        if self["mime"].startswith("image/"):
+            return Image(content)
+
+        Path(self["name"]).write_bytes(content)
+        return FileLink(self["name"])
+
+
+def load_client(apikey=None, headers=None, host=None):
+    warnings.warn(
+        "load_client(...) is deprecated, use Client(...) instead", DeprecationWarning
+    )
+
+
+class Client(SwaggerClient):
+    """client to connect to MPContribs API
+
+    Typical usage:
+        - set environment variable MPCONTRIBS_API_KEY to the API key from your MP profile
+        - import and init:
+          >>> from mpcontribs.client import Client
+          >>> client = Client()
+    """
+    # We only want to load the swagger spec from the remote server when needed and not
+    # everytime the client is initialized. Hence using the Borg design nonpattern (instead
+    # of Singleton): Since the __dict__ of any instance can be re-bound, Borg rebinds it
+    # in its __init__ to a class-attribute dictionary. Now, any reference or binding of an
+    # instance attribute will actually affect all instances equally.
+    # TODO ratelimit support in bravado (wrapped around get_entry..., monkey-patch?)
+
+    _shared_state = {}
+
+    def __init__(self, apikey=None, headers=None, host=None):
+        # - Kong forwards consumer headers when api-key used for auth
+        # - forward consumer headers when connecting through localhost
+        self.__dict__ = self._shared_state
+
+        if not host:
+            host = os.environ.get("MPCONTRIBS_API_HOST", DEFAULT_HOST)
+
+        if not apikey:
+            apikey = os.environ.get("MPCONTRIBS_API_KEY")
+
+        if apikey and headers is not None:
+            apikey = None
+            print("headers set => ignoring apikey!")
+
+        self.apikey = apikey
+        self.headers = {"x-api-key": apikey} if apikey else headers
+        self.host = host
+        ssl = host.endswith(".materialsproject.org") and not host.startswith("localhost.")
+        self.protocol = "https" if ssl else "http"
+        self.url = f"{self.protocol}://{self.host}"
+
+        if self.url not in VALID_URLS:
+            raise ValueError(f"{self.url} not a valid URL (one of {VALID_URLS})")
+
+        if "swagger_spec" not in self.__dict__ or (
+            self.swagger_spec.http_client.headers != self.headers
+        ):
+            self.load()
+
+    def load(self):
+        http_client = FidoClientGlobalHeaders(headers=self.headers)
+        loader = Loader(http_client)
+        origin_url = f"{self.url}/apispec.json"
+        spec_dict = loader.load_spec(origin_url)
+        spec_dict["host"] = self.host
+        spec_dict["schemes"] = [self.protocol]
+
+        config = {
+            "validate_responses": False,
+            "use_models": False,
+            "include_missing_properties": False,
+            "formats": [email_format, url_format],
+        }
+        bravado_config = bravado_config_from_config_dict(config)
+        for key in set(bravado_config._fields).intersection(set(config)):
+            del config[key]
+        config["bravado"] = bravado_config
+
+        swagger_spec = Spec.from_dict(spec_dict, origin_url, http_client, config)
+        super().__init__(
+            swagger_spec, also_return_response=bravado_config.also_return_response
+        )
+
+        # expand regex-based query parameters for `data` columns
+        try:
+            resp = self.projects.get_entries(_fields=["columns"]).result()
+        except AttributeError:
+            # skip in tests
+            return
+
+        columns = {"text": [], "number": []}
+        for project in resp["data"]:
+            for column in project["columns"]:
+                if column["path"].startswith("data."):
+                    col = column["path"].replace(".", "__")
+                    if column["unit"] == "NaN":
+                        columns["text"].append(col)
+                    else:
+                        col = f"{col}__value"
+                        columns["number"].append(col)
+
+        operators = {"text": ["contains"], "number": ["gte", "lte"]}
+        for path, d in spec_dict["paths"].items():
+            for verb in ["get", "put", "post", "delete"]:
+                if verb in d:
+                    old_params = deepcopy(d[verb].pop("parameters"))
+                    new_params, param_names = [], set()
+
+                    while old_params:
+                        param = old_params.pop()
+                        if param["name"].startswith("^data__"):
+                            op = param["name"].rsplit("__", 1)[1]
+                            for typ, ops in operators.items():
+                                if op in ops:
+                                    for column in columns[typ]:
+                                        new_param = deepcopy(param)
+                                        param_name = f"{column}__{op}"
+                                        if param_name not in param_names:
+                                            new_param["name"] = param_name
+                                            desc = f"filter {column} via ${op}"
+                                            new_param["description"] = desc
+                                            new_params.append(new_param)
+                                            param_names.add(param_name)
+                        else:
+                            new_params.append(param)
+
+                    d[verb]["parameters"] = new_params
+
+        swagger_spec = Spec.from_dict(spec_dict, origin_url, http_client, config)
+        super().__init__(
+            swagger_spec, also_return_response=bravado_config.also_return_response
+        )
+
+    def get_project(self, project):
+        """Convenience function to get full project entry and display as HTML table"""
+        return Dict(self.projects.get_entry(pk=project, _fields=["_all"]).result())
+
+    def get_contribution(self, cid):
+        """Convenience function to get full contribution entry and display as HTML table"""
+        fields = list(
+            self.swagger_spec.definitions.get("ContributionsSchema")._properties.keys()
+        )  # don't return dynamic fields (card_*)
+        fields.remove("notebook")
+        return Dict(self.contributions.get_entry(pk=cid, _fields=fields).result())
+
+    def get_table(self, tid_or_md5):
+        """Convenience function to get full Pandas DataFrame for a table.
+
+        Args:
+            tid_or_md5 (str): ObjectId or MD5 hash digest for table
+
+        Returns:
+            pd.DataFrame: pandas DataFrame containing table data
+        """
+        str_len = len(tid_or_md5)
+        if str_len not in {24, 32}:
+            raise ValueError(f"'{tid_or_md5}' is not a valid table id or md5 hash digest!")
+
+        if str_len == 32:
+            tables = self.tables.get_entries(md5=tid_or_md5, _fields=["id"]).result()
+            if not tables:
+                raise ValueError(f"table for md5 '{tid_or_md5}' not found!")
+            tid = tables["data"][0]["id"]
+        else:
+            tid = tid_or_md5
+
+        table = {"data": []}
+        page, pages = 1, None
+
+        while pages is None or page <= pages:
+            resp = self.tables.get_entry(
+                pk=tid, _fields=["_all"], data_page=page, data_per_page=1000
+            ).result()
+            table["data"].extend(resp["data"])
+            if pages is None:
+                pages = resp["total_data_pages"]
+                table["attrs"] = resp["attrs"]
+                table["index"] = resp["index"]
+                table["columns"] = resp["columns"]
+            page += 1
+
+        df = pd.DataFrame.from_records(
+            table["data"], columns=table["columns"], index=table["index"]
+        )
+        df.attrs = table["attrs"]
+        labels = table["attrs"].get("labels", {})
+
+        if "index" in labels:
+            df.index.name = labels["index"]
+        if "variable" in labels:
+            df.columns.name = labels["variable"]
+
+        return df
+
+    def get_structure(self, sid):
+        """Convenience function to get pymatgen structure."""
+        return Structure.from_dict(
+            self.structures.get_entry(
+                pk=sid, _fields=["lattice", "sites", "charge"]
+            ).result()
+        )
+
+    def get_attachment(self, aid_or_md5):
+        """Convenience function to get attachment.
+
+        Args:
+            aid_or_md5 (str): ObjectId or MD5 hash digest for attachment
+
+        Returns:
+            pd.DataFrame: pandas DataFrame containing table data
+        """
+        str_len = len(aid_or_md5)
+        if str_len not in {24, 32}:
+            raise ValueError(f"'{aid_or_md5}' is not a valid attachment id or md5 hash digest!")
+
+        if str_len == 32:
+            attachments = self.attachments.get_entries(
+                md5=aid_or_md5, _fields=["id"]
+            ).result()
+            if not attachments:
+                raise ValueError(f"attachment for md5 '{aid_or_md5}' not found!")
+            aid = attachments["data"][0]["id"]
+        else:
+            aid = aid_or_md5
+
+        return Attachment(self.attachments.get_entry(pk=aid, _fields=["_all"]).result())
+
+    def init_columns(self, project, columns):
+        """initialize columns for a project to set their order and desired units
+
+        Be aware that this function resets/overwrites the `columns` field in a project.
+        The `columns` field also tracks the minima and maxima of each `data` field as
+        contributions are submitted. This function should thus be executed before
+        submitting contributions, or all contributions for a project should be deleted to
+        ensure clean initialization of all columns. If columns are not initialized using
+        this function, `submit_contributions` will respect the order of columns as they
+        are submitted and will auto-determine suitable units based on the first
+        contribution containing a respective data column.
+
+        The `columns` argument is a dictionary which maps the data field names to its
+        units. Use `None` to indicate that a field doesn't have a unit. The unit for a
+        dimensionless quantity is an empty string (""). Nested fields are indicated using
+        a dot (".") in the data field name. Example:
+
+        >>> client.init_columns("sandbox", {"a": None, "b.c": "eV", "b.d": "mm", "e": ""})
+
+        This example will result in column headers on the project landing page of the form
+
+
+        |      |      data       |      |
+        | data |        b        | data |
+        |   a  | c [eV] | d [mm] | e [] |
+
+
+        Args:
+            project (str): name of the project for which to initialize data columns
+            columns (dict): dictionary mapping data column to its unit (use None as value)
+        """
+        if not isinstance(project, str):
+            return {"error": "`project` argument must be a string!"}
+
+        if not isinstance(columns, dict):
+            return {"error": "`columns` argument must be a dict!"}
+
+        existing_columns = set()
+        for k, v in columns.items():
+            nesting = k.count(".")
+            if nesting > 4:
+                return {"error": f"Nesting too deep for {k}"}
+
+            for col in existing_columns:
+                if col.startswith(k):
+                    return {"error": f"duplicate definition of {k} in {col}!"}
+
+                for n in range(1, nesting+1):
+                    if k.rsplit(".", n)[0] == col:
+                        return {"error": f"Ancestor of {k} already defined in {col}!"}
+
+            is_valid_string = isinstance(v, str) and v.lower() != "nan"
+            if not is_valid_string and v is not None:
+                return {"error": f"Unit '{v}' for {k} invalid (use `None` or a non-NaN string)!"}
+
+            if v != "" and v not in ureg:
+                return {"error": f"Unit '{v}' for {k} invalid!"}
+
+            existing_columns.add(k)
+
+        resp = self.projects.get_entries(_fields=["name"]).result()
+        valid_projects = {p["name"] for p in resp["data"]}
+
+        if project not in valid_projects:
+            return {"error": f"{project} doesn't exist or you don't have access!"}
+
+        # sort to avoid "overlapping columns" error in handsontable's NestedHeaders
+        sorted_columns = flatten(unflatten(columns, splitter="dot"), reducer="dot")
+
+        self.projects.update_entry(pk=project, project={"columns": []}).result()
+        cols = []
+
+        for path, unit in sorted_columns.items():
+            col = {"path": f"data.{path}"}
+            if unit is not None:
+                col["unit"] = unit
+
+            cols.append(col)
+
+        return self.projects.update_entry(
+            pk=project, project={"columns": cols}
+        ).result()
+
+    def delete_contributions(self, project, per_page=100, max_workers=5, retry=False):
+        """Remove all contributions for a project
+
+        Note: This also resets the columns field for a project. It might have to be
+        re-initialized via `client.init_columns()` again.`
+
+        Args:
+            project (str): name of the project for which to delete contributions
+            per_page (int): number of contributions to delete per request
+            max_workers (int): maximum number of parallel requests to send at a time
+            retry (bool): if True, retry deletion of failed contributions until done
+        """
+        tic = time.perf_counter()
+
+        if max_workers > MAX_WORKERS:
+            max_workers = MAX_WORKERS
+            print(f"max_workers reset to max {MAX_WORKERS}")
+
+        cids = self.get_contributions(project)["ids"]
+        total = len(cids)
+        # reset columns to be save (sometimes not all are reset BUGFIX?)
+        self.projects.update_entry(pk=project, project={"columns": []}).result()
+
+        if cids:
+            with FuturesSession(max_workers=max_workers) as session:
+                while cids:
+                    futures = [
+                        session.delete(
+                            f"{self.url}/contributions/",
+                            headers=self.headers,
+                            params={
+                                "project": project,
+                                "id__in": ",".join(chunk),
+                                "per_page": per_page,
+                            },
+                        )
+                        for chunk in chunks(cids, n=per_page)
+                    ]
+
+                    self._run_futures(futures, total=len(cids))
+                    cids = self.get_contributions(project)["ids"]
+
+                    if not retry:
+                        break
+
+                self.load()
+
+            toc = time.perf_counter()
+            dt = (toc - tic) / 60
+
+            if cids:
+                print(f"There were errors and {len(cids)} contributions are left to delete!")
+            else:
+                print(f"It took {dt:.1f}min to delete {total} contributions.")
+        else:
+            print(f"There aren't any contributions to delete for {project}")
+
+    @sleep_and_retry
+    @limits(calls=175, period=60)
+    def get_unique_identifiers_flag(self, name):
+        return self.projects.get_entry(
+            pk=name, _fields=["unique_identifiers"]
+        ).result()["unique_identifiers"]
+
+    @sleep_and_retry
+    @limits(calls=175, period=60)
+    def get_total_pages(self, name, per_page):
+        return self.contributions.get_entries(
+            project=name, per_page=per_page, _fields=["id"],
+        ).result()["total_pages"]
+
+    def get_contributions(self, name):
+        """get list of existing contributions"""
+        ret = defaultdict(set)
+        ret["unique_identifiers"] = self.get_unique_identifiers_flag(name)
+        pages = self.get_total_pages(name, 250)
+        id_fields = {"id", "identifier"}
+
+        @sleep_and_retry
+        @limits(calls=175, period=60)
+        def get_future(page):
+            future = session.get(
+                f"{self.url}/contributions/",
+                headers=self.headers,
+                params={
+                    "project": name,
+                    "page": page,
+                    "per_page": 250,
+                    "_fields": ",".join(id_fields | COMPONENTS)
+                },
+            )
+            setattr(future, "track_id", page)
+            return future
+
+        with FuturesSession(max_workers=MAX_WORKERS) as session:
+            # bravado future doesn't work with concurrent.futures
+            futures = [get_future(page + 1) for page in range(pages)]
+
+            while futures:
+                responses = self._run_futures(futures)
+
+                for resp in responses.values():
+                    for contrib in resp["data"]:
+                        ret["ids"].add(contrib["id"])
+                        ret["identifiers"].add(contrib["identifier"])
+
+                        for component in COMPONENTS:
+                            md5s = set(d["md5"] for d in contrib[component])
+                            ret[component] |= md5s
+
+                futures = [
+                    future
+                    for future in futures
+                    if future.track_id not in responses.keys()
+                ]
+
+        return ret
+
+    def get_number_contributions(self, **query):
+        """Retrieve total number of contributions for query
+
+        See `client.contributions.get_entries()` for keyword arguments used in query.
+        """
+        return self.contributions.get_entries(
+            _fields=["id"], _limit=1, **query
+        ).result()["total_count"]
+
+    def submit_contributions(
+        self,
+        contributions,
+        skip_dupe_check=False,
+        ignore_dupes=False,
+        retry=False,
+        per_page=100,
+        max_workers=3,
+    ):
+        """Convenience function to submit a list of contributions
+
+        Example for a single contribution dictionary:
+
+        {
+            "project": "sandbox",
+            "identifier": "mp-4",
+            "data": {
+                "a": "3 eV",
+                "b": {"c": "hello", "d": 3},
+                "d.e.f": "nest via dot-notation"
+            },
+            "structures": [<pymatgen Structure>, ...],
+            "tables": [<pandas DataFrame>, ...],
+            "attachments": [<pathlib.Path>, ...]
+        }
+
+        Args:
+            contributions (list): list of contribution dicts to submit
+            skip_dupe_check (bool): skip check for duplicates of identifiers and components
+            ignore_dupes (bool): force duplicate components to be submitted
+            retry (bool): keep trying until all contributions successfully submitted
+            per_page (int): number of contributions to submit in each chunk/request
+            max_workers (int): number of parallel requests to use to submit chunk
+        """
+        if not contributions or not isinstance(contributions, list):
+            print("Please provide list of contributions to submit.")
+            return
+
+        tic = time.perf_counter()
+
+        if max_workers > MAX_WORKERS:
+            max_workers = MAX_WORKERS
+            print(f"max_workers reset to max {MAX_WORKERS}")
+
+        # get existing contributions
+        existing = defaultdict(set)
+        existing["unique_identifiers"] = True
+        project_names = list(set(c["project"] for c in contributions))
+        initial_total = self.get_number_contributions(project__in=project_names)
+
+        if not skip_dupe_check:
+            print("get existing contributions ...")
+            existing = {
+                project_name: self.get_contributions(project_name)
+                for project_name in project_names
+            }
+
+        # prepare contributions
+        print("prepare contributions ...")
+        contribs = defaultdict(list)
+        digests = {project_name: defaultdict(set) for project_name in project_names}
+        fields = [
+            comp
+            for comp in self.swagger_spec.definitions.get(
+                "ContributionsSchema"
+            )._properties.keys()
+            if comp not in COMPONENTS
+        ]
+
+        for contrib in tqdm(contributions, leave=False):
+            project_name = contrib["project"]
+            if (
+                existing[project_name]["unique_identifiers"]
+                and contrib["identifier"] in existing[project_name]["identifiers"]
+            ):
+                continue
+
+            contribs[project_name].append({
+                k: deepcopy(
+                    unflatten(contrib[k], splitter="dot")
+                    if k == "data" else contrib[k]
+                )
+                for k in fields if k in contrib
+            })
+
+            for component in COMPONENTS:
+                contribs[project_name][-1][component] = []
+                elements = contrib.get(component, [])
+                nelems = len(elements)
+
+                if nelems > MAX_ELEMS:
+                    raise ValueError(f"Too many {component} ({nelems} > {MAX_ELEMS})!")
+
+                for idx, element in enumerate(elements):
+                    is_structure = isinstance(element, Structure)
+                    is_table = isinstance(element, pd.DataFrame)
+                    is_attachment = isinstance(element, Path)
+                    if component == "structures" and not is_structure:
+                        raise ValueError(f"Only accepting pymatgen Structure for {component}!")
+                    elif component == "tables" and not is_table:
+                        raise ValueError(f"Only accepting pandas DataFrame for {component}!")
+                    elif component == "attachments" and not is_attachment:
+                        raise ValueError(f"Only accepting pathlib.Path for {component}!")
+
+                    if is_structure:
+                        dct = element.as_dict()
+                        del dct["@module"]
+                        del dct["@class"]
+
+                        if not dct.get("charge"):
+                            del dct["charge"]
+                    elif is_table:
+                        element.index = element.index.astype(str)
+                        for col in element.columns:
+                            element[col] = element[col].astype(str)
+                        dct = element.to_dict(orient="split")
+                    elif is_attachment:
+                        kind = guess(str(element))
+
+                        if not isinstance(kind, SUPPORTED_FILETYPES):
+                            raise ValueError(
+                                f"{element.name} not supported. Use one of {SUPPORTED_MIMES}!"
+                            )
+
+                        content = element.read_bytes()
+                        size = len(content)
+
+                        if size > MAX_BYTES:
+                            raise ValueError(f"{element.name} too large ({size} > {MAX_BYTES})!")
+
+                        dct = {
+                            "mime": kind.mime,
+                            "content": b64encode(content).decode("utf-8")
+                        }
+
+                    digest = get_md5(dct)
+
+                    if is_structure:
+                        dct["name"] = getattr(element, "name", None)
+                        if not dct["name"]:
+                            c = element.composition
+                            comp = c.get_integer_formula_and_factor()
+                            dct["name"] = f"{comp[0]}-{idx}" if nelems > 1 else comp[0]
+                    elif is_table:
+                        name = f"table-{idx}" if nelems > 1 else "table"
+                        dct["name"] = element.attrs.get("name", name)
+                        title = element.attrs.get("title", dct["name"])
+                        labels = element.attrs.get("labels", {})
+                        index = element.index.name
+                        variable = element.columns.name
+
+                        if index and "index" not in labels:
+                            labels["index"] = index
+                        if variable and "variable" not in labels:
+                            labels["variable"] = variable
+
+                        dct["attrs"] = {"title": title, "labels": labels}
+                    elif is_attachment:
+                        dct["name"] = element.name
+
+                    dupe = bool(
+                        digest in digests[project_name][component] or
+                        digest in existing[project_name][component]
+                    )
+
+                    if not ignore_dupes and dupe:
+                        msg = f"Duplicate in {project_name}: {contrib['identifier']} {dct['name']}"
+                        raise ValueError(msg)
+
+                    if not dupe:
+                        digests[project_name][component].add(digest)
+                        contribs[project_name][-1][component].append(dct)
+
+        # submit contributions
+        if contribs:
+            print("submit contributions ...")
+            with FuturesSession(max_workers=max_workers) as session:
+                # bravado future doesn't work with concurrent.futures
+                total = 0
+                headers = {"Content-Type": "application/json"}
+                headers.update(self.headers)
+
+                @sleep_and_retry
+                @limits(calls=175, period=60)
+                def post_future(chunk):
+                    return session.post(
+                        f"{self.url}/contributions/",
+                        headers=headers,
+                        data=json.dumps(chunk).encode("utf-8"),
+                    )
+
+                for project_name in project_names:
+                    ncontribs = len(contribs[project_name])
+                    total += ncontribs
+
+                    while contribs[project_name]:
+                        futures = [
+                            post_future(chunk) for chunk in chunks(
+                                contribs[project_name], n=per_page
+                            )
+                        ]
+
+                        self._run_futures(futures, total=ncontribs)
+
+                        if existing[project_name]["unique_identifiers"] and retry:
+                            existing[project_name] = self.get_contributions(project_name)
+                            contribs[project_name] = [
+                                c for c in contribs[project_name]
+                                if c["identifier"] not in existing[project_name]["identifiers"]
+                            ]
+                        else:
+                            contribs[project_name] = []  # abort retrying
+                            if not existing[project_name]["unique_identifiers"] and retry:
+                                print("Please resubmit failed contributions manually.")
+
+                self.load()
+                final_total = self.get_number_contributions(project__in=project_names)
+                submitted_total = final_total - initial_total
+                toc = time.perf_counter()
+                dt = (toc - tic) / 60
+                print(f"It took {dt:.1f}min to submit {submitted_total} contributions.")
+
+                if submitted_total < total:
+                    failed_total = total - submitted_total
+                    print(f"{failed_total} contributions failed to submit. Check errors/warnings.")
+        else:
+            print("Nothing to submit.")
+
+    def _run_futures(self, futures, total=None):
+        """helper to run futures/requests"""
+        responses = {}
+
+        with tqdm(leave=False, total=total if total else len(futures)) as pbar:
+            for future in as_completed(futures):
+                response = future.result()
+                status = response.status_code
+
+                if status in {200, 201, 400, 401, 404, 500, 502}:
+                    resp = response.json()
+                    if status in {200, 201}:
+                        if total:
+                            cnt = len(resp["data"]) if "data" in resp else resp["count"]
+                        else:
+                            cnt = 1
+                        pbar.update(cnt)
+                        if hasattr(future, "track_id"):
+                            responses[future.track_id] = resp
+                        if "warning" in resp:
+                            print(resp["warning"])
+                    elif status != 502:
+                        print(resp["error"][:10000] + "...")
+                elif status not in {503, 504}:
+                    print("ERROR", response.content.decode("utf-8"))
+
+        return responses
