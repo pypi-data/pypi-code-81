@@ -1,0 +1,27 @@
+from distutils.core import setup
+setup(
+  name = 'BEAPI',
+  packages = ['BEAPI'],
+  version = '1.2',
+  license='MIT',
+  description = 'AWSOME API',
+  author = 'HerT0T',
+  author_email = 'herygan84@gmail.com',
+  url = 'https://github.com/hert0t/BEAPI',
+  download_url = 'https://github.com/hert0t/BEAPI/archive/refs/tags/v1.tar.gz',
+  keywords = ['BEAPI'],
+  install_requires=['requests'],
+  classifiers=[
+    'Development Status :: 3 - Alpha',
+    'Intended Audience :: Developers',
+    'Topic :: Software Development :: Build Tools',
+    'License :: OSI Approved :: MIT License',
+    'Programming Language :: Python :: 3',
+    'Programming Language :: Python :: 3.4',
+    'Programming Language :: Python :: 3.5',
+    'Programming Language :: Python :: 3.6',
+    'Programming Language :: Python :: 3.7',
+    'Programming Language :: Python :: 3.8',
+    'Programming Language :: Python :: 3.9',
+  ],
+)
